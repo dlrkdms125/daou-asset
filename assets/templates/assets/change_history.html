@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>변경 이력 - 서버 자산 관리</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <div class="header">
+        <h1>변경 이력</h1>
+        <div class="user-info">
+            <span>{{ user.username }}님</span>
+            <form method="post" action="{% url 'logout' %}" style="display: inline;">
+                {% csrf_token %}
+                <button type="submit" class="btn">로그아웃</button>
+            </form>
+        </div>
+    </div>
+
+    <div class="toolbar">
+        <div class="toolbar-left">
+            <a href="{% url 'asset_list' %}" class="btn btn-primary">자산 목록으로</a>
+        </div>
+        <div class="toolbar-right">
+            <form method="get" class="search-form">
+                <input type="text" name="search" placeholder="서버코드, 자산명, 변경자 검색" value="{{ search }}">
+                <button type="submit" class="btn">검색</button>
+                {% if search %}
+                <a href="{% url 'change_history' %}" class="btn">초기화</a>
+                {% endif %}
+            </form>
+        </div>
+    </div>
+
+    <div class="table-container">
+        <table class="history-table">
+            <thead>
+                <tr>
+                    <th>변경일시</th>
+                    <th>서버코드</th>
+                    <th>자산명</th>
+                    <th>변경필드</th>
+                    <th>이전값</th>
+                    <th>새로운값</th>
+                    <th>변경타입</th>
+                    <th>변경자</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for history in histories %}
+                <tr>
+                    <td>{{ history.changed_at|date:"Y-m-d H:i:s" }}</td>
+                    <td>{% if history.asset %}{{ history.asset.server_code }}{% else %}<span style="color: #666;">[시스템]</span>{% endif %}</td>
+                    <td>{% if history.asset %}{{ history.asset.asset_name }}{% else %}<span style="color: #666;">-</span>{% endif %}</td>
+                    <td>{{ history.field_name }}</td>
+                    <td class="old-value">{{ history.old_value|truncatechars:50 }}</td>
+                    <td class="new-value">{{ history.new_value|truncatechars:50 }}</td>
+                    <td>
+                        <span class="badge badge-{{ history.change_type|lower }}">
+                            {{ history.get_change_type_display }}
+                        </span>
+                    </td>
+                    <td>{{ history.user.username|default:"시스템" }}</td>
+                </tr>
+                {% empty %}
+                <tr>
+                    <td colspan="8" style="text-align: center; padding: 40px;">
+                        변경 이력이 없습니다.
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <div class="info-box">
+        <p>최근 500개의 변경 이력만 표시됩니다. 서버코드, 자산명, 변경자로 검색할 수 있습니다.</p>
+    </div>
+</body>
+</html>

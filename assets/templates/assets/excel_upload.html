@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>엑셀 업로드 - 서버 자산 관리</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <div class="header">
+        <h1>엑셀 파일 업로드</h1>
+        <div class="user-info">
+            <span>{{ user.username }}님</span>
+            <form method="post" action="{% url 'logout' %}" style="display: inline;">
+                {% csrf_token %}
+                <button type="submit" class="btn">로그아웃</button>
+            </form>
+        </div>
+    </div>
+
+    <div class="toolbar">
+        <div class="toolbar-left">
+            <a href="{% url 'asset_list' %}" class="btn btn-primary">자산 목록으로</a>
+        </div>
+    </div>
+
+    <div class="upload-container">
+        <div class="upload-box">
+            <h2>서버 자산 데이터 가져오기</h2>
+
+            {% if messages %}
+            <div class="messages">
+                {% for message in messages %}
+                <div class="message {{ message.tags }}">
+                    {{ message }}
+                </div>
+                {% endfor %}
+            </div>
+            {% endif %}
+
+            <form method="post" enctype="multipart/form-data" class="upload-form">
+                {% csrf_token %}
+
+                <div class="form-group">
+                    {{ form.excel_file.label_tag }}
+                    {{ form.excel_file }}
+                    {% if form.excel_file.errors %}
+                    <div class="error">{{ form.excel_file.errors }}</div>
+                    {% endif %}
+                    <small class="help-text">{{ form.excel_file.help_text }}</small>
+                </div>
+
+                <button type="submit" class="btn btn-primary btn-large">업로드 시작</button>
+            </form>
+
+            <div class="upload-info">
+                <h3>업로드 안내</h3>
+                <ul>
+                    <li>엑셀 파일(.xlsx 또는 .xls)을 업로드할 수 있습니다.</li>
+                    <li>첫 번째 행은 컬럼명으로 인식됩니다.</li>
+                    <li>서버코드가 동일한 경우 기존 데이터가 업데이트됩니다.</li>
+                    <li>서버코드가 없는 경우 새로운 자산으로 생성됩니다.</li>
+                    <li>최대 파일 크기: 10MB</li>
+                </ul>
+
+                <h4>지원하는 컬럼명</h4>
+                <div class="column-list">
+                    <span>상태</span>
+                    <span>서버코드</span>
+                    <span>자산명</span>
+                    <span>ACG</span>
+                    <span>OS</span>
+                    <span>사설IP</span>
+                    <span>공인IP</span>
+                    <span>VPN IP</span>
+                    <span>인터넷접점여부</span>
+                    <span>서비스 대분류</span>
+                    <span>서비스 소분류</span>
+                    <span>자산위치</span>
+                    <span>세부위치</span>
+                    <span>스펙</span>
+                    <span>담당자</span>
+                    <span>관리자</span>
+                    <span>관리부서</span>
+                    <span>기밀성</span>
+                    <span>무결성</span>
+                    <span>가용성</span>
+                    <span>중요도 점수</span>
+                    <span>중요도 등급</span>
+                    <span>비고</span>
+                    <span>모델 및 버전</span>
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

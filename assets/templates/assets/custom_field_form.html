@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% if mode == 'edit' %}필드 수정{% else %}새 필드 추가{% endif %} - 서버 자산 관리</title>
+    <link rel="stylesheet" href="/static/css/style.css?v=4">
+    <style>
+        .form-container {
+            max-width: 600px;
+            margin: 30px auto;
+            padding: 0 20px;
+        }
+        .form-box {
+            background: white;
+            border-radius: 8px;
+            padding: 30px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .form-box h2 {
+            margin-bottom: 25px;
+            color: #2c3e50;
+        }
+        .form-group {
+            margin-bottom: 20px;
+        }
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 500;
+            color: #333;
+        }
+        .form-group input[type="text"],
+        .form-group select,
+        .form-group textarea {
+            width: 100%;
+            padding: 10px 12px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        .form-group input:focus,
+        .form-group select:focus,
+        .form-group textarea:focus {
+            outline: none;
+            border-color: #3498db;
+        }
+        .form-group textarea {
+            resize: vertical;
+            min-height: 80px;
+        }
+        .form-group .help-text {
+            display: block;
+            margin-top: 5px;
+            font-size: 12px;
+            color: #666;
+        }
+        .checkbox-group {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .checkbox-group input[type="checkbox"] {
+            width: 18px;
+            height: 18px;
+        }
+        .checkbox-group label {
+            margin: 0;
+            font-weight: normal;
+        }
+        .form-actions {
+            display: flex;
+            gap: 10px;
+            margin-top: 30px;
+        }
+        .options-container {
+            display: none;
+        }
+        .options-container.show {
+            display: block;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>{% if mode == 'edit' %}필드 수정{% else %}새 필드 추가{% endif %}</h1>
+        <div class="user-info">
+            <span>{{ user.username }}님</span>
+            <form method="post" action="{% url 'logout' %}" style="display: inline;">
+                {% csrf_token %}
+                <button type="submit" class="btn">로그아웃</button>
+            </form>
+        </div>
+    </div>
+
+    <div class="toolbar">
+        <div class="toolbar-left">
+            <a href="{% url 'custom_field_list' %}" class="btn">목록으로</a>
+        </div>
+    </div>
+
+    <div class="form-container">
+        <div class="form-box">
+            <h2>{% if mode == 'edit' %}필드 수정{% else %}새 필드 추가{% endif %}</h2>
+
+            <form method="post">
+                {% csrf_token %}
+
+                <div class="form-group">
+                    <label for="name">필드명 *</label>
+                    <input type="text" id="name" name="name" required
+                           value="{% if custom_field %}{{ custom_field.name }}{% endif %}"
+                           placeholder="예: 구매일자, 라이선스 번호">
+                    <span class="help-text">자산 목록 테이블의 컬럼 헤더로 표시됩니다.</span>
+                </div>
+
+                <div class="form-group">
+                    <label for="field_type">필드 타입 *</label>
+                    <select id="field_type" name="field_type" onchange="toggleOptions()">
+                        <option value="text" {% if custom_field.field_type == 'text' %}selected{% endif %}>텍스트</option>
+                        <option value="number" {% if custom_field.field_type == 'number' %}selected{% endif %}>숫자</option>
+                        <option value="date" {% if custom_field.field_type == 'date' %}selected{% endif %}>날짜</option>
+                        <option value="boolean" {% if custom_field.field_type == 'boolean' %}selected{% endif %}>예/아니오</option>
+                        <option value="select" {% if custom_field.field_type == 'select' %}selected{% endif %}>선택 목록</option>
+                    </select>
+                </div>
+
+                <div class="form-group options-container" id="optionsContainer">
+                    <label for="options">선택 옵션</label>
+                    <textarea id="options" name="options" placeholder="옵션1, 옵션2, 옵션3">{% if custom_field %}{{ custom_field.options }}{% endif %}</textarea>
+                    <span class="help-text">쉼표(,)로 구분하여 선택할 수 있는 옵션들을 입력하세요.</span>
+                </div>
+
+                <div class="form-group">
+                    <div class="checkbox-group">
+                        <input type="checkbox" id="is_required" name="is_required"
+                               {% if custom_field.is_required %}checked{% endif %}>
+                        <label for="is_required">필수 입력 항목</label>
+                    </div>
+                </div>
+
+                {% if mode == 'edit' %}
+                <div class="form-group">
+                    <div class="checkbox-group">
+                        <input type="checkbox" id="is_active" name="is_active"
+                               {% if custom_field.is_active %}checked{% endif %}>
+                        <label for="is_active">활성화 (비활성화하면 자산 목록에 표시되지 않습니다)</label>
+                    </div>
+                </div>
+                {% endif %}
+
+                <div class="form-actions">
+                    <button type="submit" class="btn btn-primary btn-large">
+                        {% if mode == 'edit' %}수정{% else %}추가{% endif %}
+                    </button>
+                    <a href="{% url 'custom_field_list' %}" class="btn btn-large">취소</a>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        function toggleOptions() {
+            const fieldType = document.getElementById('field_type').value;
+            const optionsContainer = document.getElementById('optionsContainer');
+            if (fieldType === 'select') {
+                optionsContainer.classList.add('show');
+            } else {
+                optionsContainer.classList.remove('show');
+            }
+        }
+        // 페이지 로드 시 초기 상태 설정
+        toggleOptions();
+    </script>
+</body>
+</html>

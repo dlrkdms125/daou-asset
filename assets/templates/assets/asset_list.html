@@ -1,0 +1,186 @@
+{% load custom_filters %}
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>서버 자산 관리</title>
+    <link rel="stylesheet" href="/static/css/style.css?v=7">
+</head>
+<body>
+    <div class="header">
+        <h1>서버 자산 관리 시스템</h1>
+        <div class="header-right">
+            <div class="connected-users">
+                <span class="connected-label">다른 접속자:</span>
+                <div id="connectedUsers"></div>
+            </div>
+            <div class="user-info">
+                <span>{{ user.username }}님 환영합니다</span>
+                <form method="post" action="{% url 'logout' %}" style="display: inline;">
+                    {% csrf_token %}
+                    <button type="submit" class="btn">로그아웃</button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <div class="toolbar">
+        <div class="toolbar-left">
+            <a href="{% url 'excel_upload' %}" class="btn btn-primary">엑셀 업로드</a>
+            <a href="{% url 'change_history' %}" class="btn">변경 이력</a>
+            <a href="{% url 'custom_field_list' %}" class="btn">컬럼 관리</a>
+            <div class="column-settings">
+                <button type="button" class="btn column-toggle-btn" id="columnToggleBtn">
+                    컬럼 설정 ▼
+                </button>
+                <div class="column-dropdown" id="columnDropdown">
+                    <div class="column-dropdown-header">표시할 컬럼 선택</div>
+                    <div class="column-dropdown-actions">
+                        <button type="button" id="selectAllColumns">전체 선택</button>
+                        <button type="button" id="deselectAllColumns">전체 해제</button>
+                    </div>
+                    <div id="columnList"></div>
+                </div>
+            </div>
+        </div>
+        <div class="toolbar-right">
+            <form method="get" class="search-form">
+                <input type="text" name="search" placeholder="서버코드 또는 자산명 검색" value="{{ request.GET.search }}">
+                <button type="submit" class="btn">검색</button>
+            </form>
+        </div>
+    </div>
+
+    <div class="table-container">
+        <table class="asset-table" id="assetTable">
+            <thead>
+                <tr>
+                    <th class="row-number-header" data-column="row_number">#</th>
+                    <th class="sortable" data-column="status" data-field="status">상태</th>
+                    <th class="sortable" data-column="server_code" data-field="server_code">서버코드</th>
+                    <th class="sortable" data-column="asset_name" data-field="asset_name">자산명</th>
+                    <th class="sortable" data-column="acg" data-field="acg">ACG</th>
+                    <th class="sortable" data-column="os" data-field="os">OS</th>
+                    <th class="sortable" data-column="private_ip" data-field="private_ip">사설IP</th>
+                    <th class="sortable" data-column="public_ip" data-field="public_ip">공인IP</th>
+                    <th class="sortable" data-column="vpn_ip" data-field="vpn_ip">VPN IP</th>
+                    <th class="sortable" data-column="internet_facing" data-field="internet_facing">인터넷접점</th>
+                    <th class="sortable" data-column="service_category" data-field="service_category">서비스 대분류</th>
+                    <th class="sortable" data-column="service_subcategory" data-field="service_subcategory">서비스 소분류</th>
+                    <th class="sortable" data-column="asset_location" data-field="asset_location">자산위치</th>
+                    <th class="sortable" data-column="detailed_location" data-field="detailed_location">세부위치</th>
+                    <th class="sortable" data-column="specs" data-field="specs">스펙</th>
+                    <th class="sortable" data-column="manager" data-field="manager">담당자</th>
+                    <th class="sortable" data-column="administrator" data-field="administrator">관리자</th>
+                    <th class="sortable" data-column="management_department" data-field="management_department">관리부서</th>
+                    <th class="sortable" data-column="confidentiality" data-field="confidentiality">기밀성</th>
+                    <th class="sortable" data-column="integrity" data-field="integrity">무결성</th>
+                    <th class="sortable" data-column="availability" data-field="availability">가용성</th>
+                    <th class="sortable" data-column="importance_score" data-field="importance_score">중요도점수</th>
+                    <th class="sortable" data-column="importance_grade" data-field="importance_grade">중요도등급</th>
+                    <th class="sortable" data-column="notes" data-field="notes">비고</th>
+                    <th class="sortable" data-column="model_version" data-field="model_version">모델/버전</th>
+                    <th class="sortable" data-column="last_modified_date" data-field="last_modified_date">최종수정일</th>
+                    {% for field in custom_fields %}
+                    <th class="sortable custom-field-header" data-column="{{ field.field_key }}" data-field="{{ field.field_key }}" data-custom="true">{{ field.name }}</th>
+                    {% endfor %}
+                </tr>
+            </thead>
+            <tbody>
+                {% for asset in assets %}
+                <tr data-asset-id="{{ asset.id }}">
+                    <td class="row-number-cell" data-field="row_number">{{ forloop.counter }}</td>
+                    <td contenteditable="true" data-field="status">{{ asset.status }}</td>
+                    <td contenteditable="true" data-field="server_code">{% if asset.server_code|slice:":4" != "NEW_" %}{{ asset.server_code }}{% endif %}</td>
+                    <td contenteditable="true" data-field="asset_name">{{ asset.asset_name }}</td>
+                    <td contenteditable="true" data-field="acg">{{ asset.acg }}</td>
+                    <td contenteditable="true" data-field="os">{{ asset.os }}</td>
+                    <td contenteditable="true" data-field="private_ip">{{ asset.private_ip }}</td>
+                    <td contenteditable="true" data-field="public_ip">{{ asset.public_ip }}</td>
+                    <td contenteditable="true" data-field="vpn_ip">{{ asset.vpn_ip }}</td>
+                    <td contenteditable="true" data-field="internet_facing">{% if asset.internet_facing is not None %}{{ asset.internet_facing|yesno:"예,아니오" }}{% endif %}</td>
+                    <td contenteditable="true" data-field="service_category">{{ asset.service_category }}</td>
+                    <td contenteditable="true" data-field="service_subcategory">{{ asset.service_subcategory }}</td>
+                    <td contenteditable="true" data-field="asset_location">{{ asset.asset_location }}</td>
+                    <td contenteditable="true" data-field="detailed_location">{{ asset.detailed_location }}</td>
+                    <td contenteditable="true" data-field="specs">{{ asset.specs }}</td>
+                    <td contenteditable="true" data-field="manager">{{ asset.manager }}</td>
+                    <td contenteditable="true" data-field="administrator">{{ asset.administrator }}</td>
+                    <td contenteditable="true" data-field="management_department">{{ asset.management_department }}</td>
+                    <td contenteditable="true" data-field="confidentiality">{{ asset.confidentiality }}</td>
+                    <td contenteditable="true" data-field="integrity">{{ asset.integrity }}</td>
+                    <td contenteditable="true" data-field="availability">{{ asset.availability }}</td>
+                    <td contenteditable="true" data-field="importance_score">{{ asset.importance_score|default:"" }}</td>
+                    <td contenteditable="true" data-field="importance_grade">{{ asset.importance_grade }}</td>
+                    <td contenteditable="true" data-field="notes">{{ asset.notes }}</td>
+                    <td contenteditable="true" data-field="model_version">{{ asset.model_version }}</td>
+                    <td data-field="last_modified_date">{{ asset.last_modified_date|date:"Y-m-d H:i" }}</td>
+                    {% for field in custom_fields %}
+                    {% with asset_values=custom_values|get_item:asset.id %}
+                    <td contenteditable="true" data-field="{{ field.field_key }}" data-custom="true" data-field-type="{{ field.field_type }}">{{ asset_values|get_item:field.field_key }}</td>
+                    {% endwith %}
+                    {% endfor %}
+                </tr>
+                {% empty %}
+                <tr>
+                    <td colspan="26" style="text-align: center; padding: 40px;">
+                        등록된 서버 자산이 없습니다. 엑셀 업로드를 통해 데이터를 가져오세요.
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <div class="status-bar">
+        <span id="syncStatus">연결 중...</span>
+        <span>총 {{ assets|length }}개 자산</span>
+    </div>
+
+    <script>
+        const userId = {{ user_id }};
+        const username = "{{ user.username }}";
+        const wsScheme = window.location.protocol === "https:" ? "wss" : "ws";
+        const wsUrl = wsScheme + '://' + window.location.host + '/ws/assets/';
+
+        // 컬럼 정보 (기본 컬럼)
+        const columns = [
+            { field: 'status', name: '상태' },
+            { field: 'server_code', name: '서버코드' },
+            { field: 'asset_name', name: '자산명' },
+            { field: 'acg', name: 'ACG' },
+            { field: 'os', name: 'OS' },
+            { field: 'private_ip', name: '사설IP' },
+            { field: 'public_ip', name: '공인IP' },
+            { field: 'vpn_ip', name: 'VPN IP' },
+            { field: 'internet_facing', name: '인터넷접점' },
+            { field: 'service_category', name: '서비스 대분류' },
+            { field: 'service_subcategory', name: '서비스 소분류' },
+            { field: 'asset_location', name: '자산위치' },
+            { field: 'detailed_location', name: '세부위치' },
+            { field: 'specs', name: '스펙' },
+            { field: 'manager', name: '담당자' },
+            { field: 'administrator', name: '관리자' },
+            { field: 'management_department', name: '관리부서' },
+            { field: 'confidentiality', name: '기밀성' },
+            { field: 'integrity', name: '무결성' },
+            { field: 'availability', name: '가용성' },
+            { field: 'importance_score', name: '중요도점수' },
+            { field: 'importance_grade', name: '중요도등급' },
+            { field: 'notes', name: '비고' },
+            { field: 'model_version', name: '모델/버전' },
+            { field: 'last_modified_date', name: '최종수정일' },
+            // 사용자 정의 필드
+            {% for field in custom_fields %}
+            { field: '{{ field.field_key }}', name: '{{ field.name }}', isCustom: true },
+            {% endfor %}
+        ];
+
+        // CSRF 토큰
+        const csrfToken = '{{ csrf_token }}';
+    </script>
+    <script src="/static/js/realtime_sync.js?v=10"></script>
+    <script src="/static/js/column_sort.js?v=13"></script>
+</body>
+</html>

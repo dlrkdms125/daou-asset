@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>필드 삭제 확인 - 서버 자산 관리</title>
+    <link rel="stylesheet" href="/static/css/style.css?v=4">
+    <style>
+        .confirm-container {
+            max-width: 500px;
+            margin: 50px auto;
+            padding: 0 20px;
+        }
+        .confirm-box {
+            background: white;
+            border-radius: 8px;
+            padding: 30px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            text-align: center;
+        }
+        .confirm-box h2 {
+            margin-bottom: 20px;
+            color: #e74c3c;
+        }
+        .confirm-box p {
+            margin-bottom: 10px;
+            color: #555;
+        }
+        .field-name {
+            font-size: 18px;
+            font-weight: 600;
+            color: #2c3e50;
+            margin: 20px 0;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 4px;
+        }
+        .warning {
+            background: #fff3cd;
+            border: 1px solid #ffc107;
+            border-radius: 4px;
+            padding: 15px;
+            margin: 20px 0;
+            color: #856404;
+            font-size: 14px;
+        }
+        .form-actions {
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+            margin-top: 25px;
+        }
+        .btn-danger {
+            background-color: #e74c3c;
+            color: white;
+            border-color: #e74c3c;
+        }
+        .btn-danger:hover {
+            background-color: #c0392b;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>필드 삭제 확인</h1>
+        <div class="user-info">
+            <span>{{ user.username }}님</span>
+            <form method="post" action="{% url 'logout' %}" style="display: inline;">
+                {% csrf_token %}
+                <button type="submit" class="btn">로그아웃</button>
+            </form>
+        </div>
+    </div>
+
+    <div class="confirm-container">
+        <div class="confirm-box">
+            <h2>필드를 삭제하시겠습니까?</h2>
+
+            <div class="field-name">{{ custom_field.name }}</div>
+
+            <p>타입: {{ custom_field.get_field_type_display }}</p>
+            <p>필드 키: {{ custom_field.field_key }}</p>
+
+            <div class="warning">
+                이 필드를 삭제하면 모든 자산에 저장된 해당 필드의 값도 함께 삭제됩니다.
+                이 작업은 되돌릴 수 없습니다.
+            </div>
+
+            <form method="post">
+                {% csrf_token %}
+                <div class="form-actions">
+                    <button type="submit" class="btn btn-danger btn-large">삭제</button>
+                    <a href="{% url 'custom_field_list' %}" class="btn btn-large">취소</a>
+                </div>
+            </form>
+        </div>
+    </div>
+</body>
+</html>
