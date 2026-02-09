@@ -6,7 +6,7 @@ class ServerAsset(models.Model):
     """서버 자산 모델"""
 
     # 기본 정보
-    server_code = models.CharField('서버코드', max_length=100, unique=True)
+    server_code = models.CharField('서버코드', max_length=100, blank=True)
     asset_name = models.CharField('자산명', max_length=200)
     status = models.CharField('상태', max_length=50, blank=True)
 

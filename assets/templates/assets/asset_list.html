@@ -5,7 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>서버 자산 관리</title>
-    <link rel="stylesheet" href="/static/css/style.css?v=7">
+    <link rel="stylesheet" href="/static/css/style.css?v={% now 'U' %}">
 </head>
 <body>
     <div class="header">
@@ -180,7 +180,7 @@
         // CSRF 토큰
         const csrfToken = '{{ csrf_token }}';
     </script>
-    <script src="/static/js/realtime_sync.js?v=10"></script>
-    <script src="/static/js/column_sort.js?v=13"></script>
+    <script src="/static/js/realtime_sync.js?v={% now 'U' %}"></script>
+    <script src="/static/js/column_sort.js?v={% now 'U' %}"></script>
 </body>
 </html>

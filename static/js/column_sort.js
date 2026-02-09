@@ -82,7 +82,7 @@ function saveFilterState(filters) {
     localStorage.setItem(FILTER_STATE_KEY, JSON.stringify(filters));
 }
 
-// 컬럼 순서 적용
+// 컬럼 순서 적용 (최적화: tbody를 DOM에서 분리 후 작업하여 리플로우 최소화)
 function applyColumnOrder() {
     const table = document.getElementById('assetTable');
     if (!table) return;
@@ -110,7 +110,12 @@ function applyColumnOrder() {
         }
     });
 
-    // 각 행의 셀들 재정렬
+    // tbody를 DOM에서 분리 (리플로우 방지)
+    const tbodyParent = tbody.parentNode;
+    const tbodyNext = tbody.nextSibling;
+    tbodyParent.removeChild(tbody);
+
+    // 각 행의 셀들 재정렬 (DOM 분리 상태에서 수행 → 리플로우 없음)
     const rows = tbody.querySelectorAll('tr[data-asset-id]');
     rows.forEach(row => {
         const cells = Array.from(row.querySelectorAll('td'));
@@ -122,13 +127,19 @@ function applyColumnOrder() {
             }
         });
 
-        // 셀 재정렬
         order.forEach(field => {
             if (cellMap[field]) {
                 row.appendChild(cellMap[field]);
             }
         });
     });
+
+    // tbody를 DOM에 재부착 (단 1번의 리플로우)
+    if (tbodyNext) {
+        tbodyParent.insertBefore(tbody, tbodyNext);
+    } else {
+        tbodyParent.appendChild(tbody);
+    }
 }
 
 // 컬럼 드롭다운 생성
@@ -171,27 +182,27 @@ function toggleColumn(field, visible) {
     applyColumnVisibility();
 }
 
-// 컬럼 가시성 적용
+// 컬럼 가시성 적용 (최적화: CSS 스타일 주입으로 DOM 조작 제거)
 function applyColumnVisibility() {
     const visibility = loadColumnVisibility();
-    const table = document.getElementById('assetTable');
-    if (!table) return;
 
-    columns.forEach((col, index) => {
-        const isVisible = visibility[col.field] !== false;
+    // 동적 스타일 태그 생성 또는 재사용
+    let styleEl = document.getElementById('columnVisibilityStyle');
+    if (!styleEl) {
+        styleEl = document.createElement('style');
+        styleEl.id = 'columnVisibilityStyle';
+        document.head.appendChild(styleEl);
+    }
 
-        // 헤더 셀
-        const headerCell = table.querySelector(`th[data-column="${col.field}"]`);
-        if (headerCell) {
-            headerCell.classList.toggle('column-hidden', !isVisible);
+    // 숨길 컬럼에 대한 CSS 규칙 생성 (DOM 조작 없이 CSS로 처리)
+    let css = '';
+    columns.forEach(col => {
+        if (visibility[col.field] === false) {
+            css += `th[data-column="${col.field}"], td[data-field="${col.field}"] { display: none !important; }\n`;
         }
-
-        // 데이터 셀
-        const dataCells = table.querySelectorAll(`td[data-field="${col.field}"]`);
-        dataCells.forEach(cell => {
-            cell.classList.toggle('column-hidden', !isVisible);
-        });
     });
+
+    styleEl.textContent = css;
 }
 
 // 전체 선택
@@ -432,96 +443,101 @@ function recordColumnOrderChange(columnName, oldPosition, newPosition) {
     });
 }
 
-// 행 드래그 앤 드롭 설정
+// 행 드래그 앤 드롭 설정 (최적화: 이벤트 위임 - 2,345개 리스너 → 5개 리스너)
 function setupRowDragAndDrop() {
     const table = document.getElementById('assetTable');
     if (!table) return;
 
     const tbody = table.querySelector('tbody');
-    const rows = tbody.querySelectorAll('tr[data-asset-id]');
+    if (!tbody) return;
 
-    rows.forEach(row => {
+    // 모든 기존 행에 draggable 속성 설정
+    tbody.querySelectorAll('tr[data-asset-id]').forEach(row => {
         row.setAttribute('draggable', true);
+    });
 
-        row.addEventListener('dragstart', function(e) {
-            // 셀 편집 중이면 드래그 방지
-            if (e.target.tagName === 'TD' && e.target.isContentEditable) {
-                e.preventDefault();
-                return;
-            }
+    // 이벤트 위임: tbody에 한 번만 리스너 등록
+    tbody.addEventListener('dragstart', function(e) {
+        const row = e.target.closest('tr[data-asset-id]');
+        if (!row) return;
 
-            draggedRow = this;
-            this.classList.add('dragging');
-            e.dataTransfer.effectAllowed = 'move';
-            e.dataTransfer.setData('text/plain', this.dataset.assetId);
-
-            // 드래그 시작 위치 저장
-            const allRows = Array.from(tbody.querySelectorAll('tr[data-asset-id]'));
-            this.dataset.startIndex = allRows.indexOf(this);
-        });
-
-        row.addEventListener('dragend', function() {
-            this.classList.remove('dragging');
-            draggedRow = null;
-
-            // 모든 행에서 드롭 영역 스타일 제거
-            rows.forEach(r => {
-                r.classList.remove('drag-over-top', 'drag-over-bottom');
-            });
-        });
-
-        row.addEventListener('dragover', function(e) {
+        if (e.target.tagName === 'TD' && e.target.isContentEditable) {
             e.preventDefault();
-            if (draggedRow === this || !draggedRow) return;
+            return;
+        }
 
-            e.dataTransfer.dropEffect = 'move';
+        draggedRow = row;
+        row.classList.add('dragging');
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', row.dataset.assetId);
 
-            // 마우스 위치에 따라 위/아래 표시
-            const rect = this.getBoundingClientRect();
-            const midpoint = rect.top + rect.height / 2;
+        const allRows = Array.from(tbody.querySelectorAll('tr[data-asset-id]'));
+        row.dataset.startIndex = allRows.indexOf(row);
+    });
 
-            rows.forEach(r => {
-                r.classList.remove('drag-over-top', 'drag-over-bottom');
-            });
+    tbody.addEventListener('dragend', function(e) {
+        const row = e.target.closest('tr[data-asset-id]');
+        if (!row) return;
 
-            if (e.clientY < midpoint) {
-                this.classList.add('drag-over-top');
-            } else {
-                this.classList.add('drag-over-bottom');
-            }
+        row.classList.remove('dragging');
+        draggedRow = null;
+
+        tbody.querySelectorAll('.drag-over-top, .drag-over-bottom').forEach(r => {
+            r.classList.remove('drag-over-top', 'drag-over-bottom');
+        });
+    });
+
+    tbody.addEventListener('dragover', function(e) {
+        e.preventDefault();
+        const row = e.target.closest('tr[data-asset-id]');
+        if (!row || draggedRow === row || !draggedRow) return;
+
+        e.dataTransfer.dropEffect = 'move';
+
+        const rect = row.getBoundingClientRect();
+        const midpoint = rect.top + rect.height / 2;
+
+        tbody.querySelectorAll('.drag-over-top, .drag-over-bottom').forEach(r => {
+            r.classList.remove('drag-over-top', 'drag-over-bottom');
         });
 
-        row.addEventListener('dragleave', function() {
-            this.classList.remove('drag-over-top', 'drag-over-bottom');
-        });
+        if (e.clientY < midpoint) {
+            row.classList.add('drag-over-top');
+        } else {
+            row.classList.add('drag-over-bottom');
+        }
+    });
 
-        row.addEventListener('drop', function(e) {
-            e.preventDefault();
-            if (draggedRow === this || !draggedRow) return;
+    tbody.addEventListener('dragleave', function(e) {
+        const row = e.target.closest('tr[data-asset-id]');
+        if (row) {
+            row.classList.remove('drag-over-top', 'drag-over-bottom');
+        }
+    });
 
-            this.classList.remove('drag-over-top', 'drag-over-bottom');
+    tbody.addEventListener('drop', function(e) {
+        e.preventDefault();
+        const row = e.target.closest('tr[data-asset-id]');
+        if (!row || draggedRow === row || !draggedRow) return;
 
-            const startIndex = parseInt(draggedRow.dataset.startIndex);
+        row.classList.remove('drag-over-top', 'drag-over-bottom');
 
-            // 마우스 위치에 따라 삽입 위치 결정
-            const rect = this.getBoundingClientRect();
-            const midpoint = rect.top + rect.height / 2;
+        const startIndex = parseInt(draggedRow.dataset.startIndex);
 
-            if (e.clientY < midpoint) {
-                // 이 행 위에 삽입
-                tbody.insertBefore(draggedRow, this);
-            } else {
-                // 이 행 아래에 삽입
-                tbody.insertBefore(draggedRow, this.nextSibling);
-            }
+        const rect = row.getBoundingClientRect();
+        const midpoint = rect.top + rect.height / 2;
 
-            // 새 순서 계산 및 서버에 저장
-            const newRows = Array.from(tbody.querySelectorAll('tr[data-asset-id]'));
-            const newIndex = newRows.indexOf(draggedRow);
-            const order = newRows.map(r => parseInt(r.dataset.assetId));
+        if (e.clientY < midpoint) {
+            tbody.insertBefore(draggedRow, row);
+        } else {
+            tbody.insertBefore(draggedRow, row.nextSibling);
+        }
 
-            saveRowOrder(order, draggedRow.dataset.assetId, draggedRow.querySelector('td[data-field="asset_name"]')?.textContent || '', startIndex, newIndex);
-        });
+        const newRows = Array.from(tbody.querySelectorAll('tr[data-asset-id]'));
+        const newIndex = newRows.indexOf(draggedRow);
+        const order = newRows.map(r => parseInt(r.dataset.assetId));
+
+        saveRowOrder(order, draggedRow.dataset.assetId, draggedRow.querySelector('td[data-field="asset_name"]')?.textContent || '', startIndex, newIndex);
     });
 }
 
@@ -912,32 +928,43 @@ function updateRowCount() {
 
 // 초기화
 document.addEventListener('DOMContentLoaded', function() {
-    // 저장된 컬럼 순서 적용
+    const _t0 = performance.now();
+
+    console.time('[성능] 전체 초기화');
+
+    console.time('[성능] applyColumnOrder');
     applyColumnOrder();
+    console.timeEnd('[성능] applyColumnOrder');
 
-    // 컬럼 드롭다운 생성
+    console.time('[성능] createColumnDropdown');
     createColumnDropdown();
+    console.timeEnd('[성능] createColumnDropdown');
 
-    // 저장된 컬럼 가시성 적용
+    console.time('[성능] applyColumnVisibility');
     applyColumnVisibility();
+    console.timeEnd('[성능] applyColumnVisibility');
 
-    // 헤더 드래그 앤 드롭 설정
+    console.time('[성능] setupHeaderDragAndDrop');
     setupHeaderDragAndDrop();
+    console.timeEnd('[성능] setupHeaderDragAndDrop');
 
-    // 행 드래그 앤 드롭 설정
+    console.time('[성능] setupRowDragAndDrop');
     setupRowDragAndDrop();
+    console.timeEnd('[성능] setupRowDragAndDrop');
 
-    // 필터 UI 생성
+    console.time('[성능] createFilterUI');
     createFilterUI();
+    console.timeEnd('[성능] createFilterUI');
 
     // 저장된 정렬 상태 로드 및 적용
     currentSort = loadSortState();
     if (currentSort.field && currentSort.direction) {
+        console.time('[성능] sortTable (복원)');
         updateSortHeaders();
-        // 정렬 다시 적용
         const tempDirection = currentSort.direction;
         currentSort.direction = tempDirection === 'asc' ? null : 'asc';
         sortTable(currentSort.field);
+        console.timeEnd('[성능] sortTable (복원)');
     }
 
     // 드롭다운 토글
@@ -950,20 +977,17 @@ document.addEventListener('DOMContentLoaded', function() {
             dropdown.classList.toggle('show');
         });
 
-        // 드롭다운 외부 클릭 시 닫기
         document.addEventListener('click', (e) => {
             if (!dropdown.contains(e.target) && e.target !== toggleBtn) {
                 dropdown.classList.remove('show');
             }
         });
 
-        // 드롭다운 내부 클릭 시 닫히지 않게
         dropdown.addEventListener('click', (e) => {
             e.stopPropagation();
         });
     }
 
-    // 전체 선택/해제 버튼
     const selectAllBtn = document.getElementById('selectAllColumns');
     const deselectAllBtn = document.getElementById('deselectAllColumns');
 
@@ -984,21 +1008,40 @@ document.addEventListener('DOMContentLoaded', function() {
         });
 
         header.addEventListener('click', (e) => {
-            // 드래그 후 클릭 방지 (200ms 이상이면 드래그로 간주)
             if (Date.now() - mouseDownTime < 200) {
                 sortTable(header.dataset.column);
             }
         });
     });
 
-    // 행 번호 업데이트
+    console.time('[성능] updateRowNumbers');
     updateRowNumbers();
+    console.timeEnd('[성능] updateRowNumbers');
 
-    // 열 선택 및 복사/붙여넣기 설정
+    console.time('[성능] setupColumnSelection');
     setupColumnSelection();
+    console.timeEnd('[성능] setupColumnSelection');
 
-    // 컨텍스트 메뉴 생성
+    console.time('[성능] createContextMenu');
     createContextMenu();
+    console.timeEnd('[성능] createContextMenu');
+
+    console.timeEnd('[성능] 전체 초기화');
+    console.log(`[성능] 전체 초기화 완료: ${(performance.now() - _t0).toFixed(1)}ms`);
+
+    // 페이지 이탈 시 현재 행 순서를 서버에 저장
+    let orderDirty = false;
+    window._markOrderDirty = function() { orderDirty = true; };
+
+    window.addEventListener('beforeunload', function() {
+        if (!orderDirty) return;
+        const rows = document.querySelectorAll('#assetTable tbody tr[data-asset-id]');
+        const order = Array.from(rows).map(r => parseInt(r.dataset.assetId)).filter(id => !isNaN(id));
+        if (order.length === 0) return;
+        navigator.sendBeacon('/assets/reorder-assets/',
+            new Blob([JSON.stringify({ order: order })], { type: 'application/json' })
+        );
+    });
 });
 
 // ============ 행 번호 기능 ============
@@ -1029,49 +1072,59 @@ let selectedRow = null;
 let copiedRowData = null;
 let menuSelectedRow = null; // 컨텍스트 메뉴용 선택 정보
 
-// 열 선택 설정
+// 열 선택 설정 (최적화: 이벤트 위임 - 938개 리스너 → 테이블 레벨 위임)
 function setupColumnSelection() {
     const table = document.getElementById('assetTable');
     if (!table) return;
 
-    // 헤더 클릭으로 열 선택
-    const headers = table.querySelectorAll('thead th');
-    headers.forEach(header => {
-        header.addEventListener('click', function(e) {
-            // Ctrl 또는 Cmd 키와 함께 클릭하면 열 선택
+    // 헤더 이벤트 위임: thead에 한 번만 등록
+    const thead = table.querySelector('thead');
+    if (thead) {
+        thead.addEventListener('click', function(e) {
+            const header = e.target.closest('th');
+            if (!header) return;
+
             if (e.ctrlKey || e.metaKey) {
                 e.preventDefault();
                 e.stopPropagation();
-                selectColumn(this.dataset.column || this.dataset.field);
+                selectColumn(header.dataset.column || header.dataset.field);
             }
         });
 
-        // 우클릭 컨텍스트 메뉴
-        header.addEventListener('contextmenu', function(e) {
+        thead.addEventListener('contextmenu', function(e) {
+            const header = e.target.closest('th');
+            if (!header) return;
+
             e.preventDefault();
-            const field = this.dataset.column || this.dataset.field;
+            const field = header.dataset.column || header.dataset.field;
             if (field && field !== 'row_number') {
                 selectColumn(field);
                 showContextMenu(e.clientX, e.clientY, 'column');
             }
         });
-    });
+    }
 
-    // 행 번호 셀 클릭으로 행 선택
-    const rowNumberCells = table.querySelectorAll('.row-number-cell');
-    rowNumberCells.forEach(cell => {
-        cell.addEventListener('click', function(e) {
-            const row = this.closest('tr');
+    // 행 번호 셀 이벤트 위임: tbody에 한 번만 등록
+    const tbody = table.querySelector('tbody');
+    if (tbody) {
+        tbody.addEventListener('click', function(e) {
+            const cell = e.target.closest('.row-number-cell');
+            if (!cell) return;
+
+            const row = cell.closest('tr');
             selectRow(row);
         });
 
-        cell.addEventListener('contextmenu', function(e) {
+        tbody.addEventListener('contextmenu', function(e) {
+            const cell = e.target.closest('.row-number-cell');
+            if (!cell) return;
+
             e.preventDefault();
-            const row = this.closest('tr');
+            const row = cell.closest('tr');
             selectRow(row);
             showContextMenu(e.clientX, e.clientY, 'row');
         });
-    });
+    }
 
     // 문서 클릭 시 선택 해제
     document.addEventListener('click', function(e) {
@@ -1083,12 +1136,8 @@ function setupColumnSelection() {
 
     // 키보드 단축키
     document.addEventListener('keydown', function(e) {
-        // Ctrl+C: 복사
         if ((e.ctrlKey || e.metaKey) && e.key === 'c') {
-            // 셀 편집 중이면 기본 동작 허용
-            if (document.activeElement.isContentEditable) {
-                return;
-            }
+            if (document.activeElement.isContentEditable) return;
             if (selectedRow) {
                 e.preventDefault();
                 copyRow();
@@ -1097,12 +1146,8 @@ function setupColumnSelection() {
                 copyColumn();
             }
         }
-        // Ctrl+V: 붙여넣기
         if ((e.ctrlKey || e.metaKey) && e.key === 'v') {
-            // 셀 편집 중이면 기본 동작 허용
-            if (document.activeElement.isContentEditable) {
-                return;
-            }
+            if (document.activeElement.isContentEditable) return;
             if (copiedRowData) {
                 e.preventDefault();
                 pasteRow();
@@ -1111,7 +1156,6 @@ function setupColumnSelection() {
                 pasteColumn();
             }
         }
-        // Escape: 선택 해제
         if (e.key === 'Escape') {
             clearSelection();
             hideContextMenu();
@@ -1212,7 +1256,7 @@ function copyColumn() {
     });
 }
 
-// 열 붙여넣기 (내부 복사 데이터 사용)
+// 행 붙여넣기 (내부 복사 데이터 사용)
 function pasteColumn() {
     // menuSelectedColumn 또는 selectedColumn 사용 (컨텍스트 메뉴 클릭 시 selectedColumn이 초기화될 수 있음)
     const targetColumn = menuSelectedColumn || selectedColumn;
@@ -1345,6 +1389,19 @@ function deleteSelectedRow() {
     const assetId = targetRow.dataset.assetId;
     if (!confirm('이 열을 삭제하시겠습니까?')) return;
 
+    const _opStart = performance.now();
+    // 즉시 DOM에서 제거 (낙관적 UI)
+    const parentNode = targetRow.parentNode;
+    const nextSibling = targetRow.nextSibling;
+    targetRow.remove();
+    updateRowNumbers();
+    clearSelection();
+    console.log(`[성능] 열 삭제 DOM 작업: ${(performance.now() - _opStart).toFixed(1)}ms`);
+    showNotification('열이 삭제되었습니다.');
+    if (window._markOrderDirty) window._markOrderDirty();
+
+    // 서버에 백그라운드로 요청
+    const _fetchStart = performance.now();
     fetch('/assets/delete-asset/', {
         method: 'POST',
         headers: {
@@ -1355,23 +1412,24 @@ function deleteSelectedRow() {
     })
     .then(response => response.json())
     .then(data => {
-        if (data.success) {
-            targetRow.remove();
+        console.log(`[성능] 열 삭제 서버 응답: ${(performance.now() - _fetchStart).toFixed(1)}ms`);
+        if (!data.success) {
+            parentNode.insertBefore(targetRow, nextSibling);
             updateRowNumbers();
-            clearSelection();
-            showNotification('열이 삭제되었습니다.');
-        } else {
             showNotification('삭제 실패: ' + (data.error || '알 수 없는 오류'));
         }
     })
     .catch(error => {
-        console.error('삭제 오류:', error);
+        // 오류 시 행 복원
+        parentNode.insertBefore(targetRow, nextSibling);
+        updateRowNumbers();
         showNotification('삭제 중 오류가 발생했습니다.');
     });
 }
 
-// 빈 행 생성 (우클릭 메뉴 -> 새 행 추가)
+// 빈 행 생성 (우클릭 메뉴 -> 새 열 추가)
 function createNewEmptyRow() {
+    const _opStart = performance.now();
     const targetRow = menuSelectedRow || selectedRow;
     let insertAfterAssetId = null;
     let insertAfterRow = null;
@@ -1380,7 +1438,6 @@ function createNewEmptyRow() {
         insertAfterAssetId = targetRow.dataset.assetId;
         insertAfterRow = targetRow;
     } else {
-        // 선택된 행이 없으면 테이블 마지막 행 아래에 삽입
         const tbody = document.querySelector('#assetTable tbody');
         const lastRow = tbody ? tbody.querySelector('tr:last-child') : null;
         if (lastRow && lastRow.dataset.assetId) {
@@ -1389,6 +1446,15 @@ function createNewEmptyRow() {
         }
     }
 
+    // 즉시 DOM에 빈 행 삽입 (낙관적 UI)
+    const tempId = 'temp_' + Date.now();
+    const newRow = insertEmptyRow(insertAfterRow, { new_asset_id: tempId });
+    console.log(`[성능] 새 열 추가 DOM 작업: ${(performance.now() - _opStart).toFixed(1)}ms`);
+    showNotification('새 열이 추가되었습니다.');
+    if (window._markOrderDirty) window._markOrderDirty();
+
+    // 서버에 백그라운드로 요청
+    const _fetchStart = performance.now();
     fetch('/assets/create-empty-asset/', {
         method: 'POST',
         headers: {
@@ -1401,23 +1467,26 @@ function createNewEmptyRow() {
     })
     .then(response => response.json())
     .then(data => {
+        console.log(`[성능] 새 열 추가 서버 응답: ${(performance.now() - _fetchStart).toFixed(1)}ms`);
         if (data.success) {
-            insertEmptyRow(insertAfterRow, data);
-            showNotification('새 행이 추가되었습니다.');
+            newRow.dataset.assetId = data.new_asset_id;
         } else {
-            showNotification('행 추가 실패: ' + (data.error || '알 수 없는 오류'));
+            newRow.remove();
+            updateRowNumbers();
+            showNotification('열 추가 실패: ' + (data.error || '알 수 없는 오류'));
         }
     })
-    .catch(error => {
-        console.error('행 생성 오류:', error);
-        showNotification('행 추가 중 오류가 발생했습니다.');
+    .catch(() => {
+        newRow.remove();
+        updateRowNumbers();
+        showNotification('열 추가 중 오류가 발생했습니다.');
     });
 }
 
-// 빈 행을 테이블에 동적으로 추가
+// 빈 행을 테이블에 동적으로 추가 (행 요소 반환)
 function insertEmptyRow(afterRow, data) {
     const tbody = document.querySelector('#assetTable tbody');
-    if (!tbody) return;
+    if (!tbody) return null;
 
     const newRow = document.createElement('tr');
     newRow.dataset.assetId = data.new_asset_id;
@@ -1470,6 +1539,8 @@ function insertEmptyRow(afterRow, data) {
     setTimeout(() => {
         newRow.classList.remove('new-row-highlight');
     }, 2000);
+
+    return newRow;
 }
 
 // 행 붙여넣기 (새 행 생성)
@@ -1488,12 +1559,20 @@ function pasteRow() {
         insertAfterAssetId = targetRow.dataset.assetId;
         insertAfterRow = targetRow;
     } else {
-        // 선택된 행이 없으면 복사한 행 아래에 삽입
         insertAfterAssetId = copiedRowData.assetId;
         insertAfterRow = document.querySelector(`tr[data-asset-id="${copiedRowData.assetId}"]`);
     }
 
-    // 서버에 새 행 생성 요청
+    // 즉시 DOM에 복사 행 삽입 (낙관적 UI)
+    const _opStart = performance.now();
+    const tempId = 'temp_' + Date.now();
+    const newRow = insertNewRow(insertAfterRow, { new_asset_id: tempId, server_code: '' });
+    console.log(`[성능] 붙여넣기 DOM 작업: ${(performance.now() - _opStart).toFixed(1)}ms`);
+    showNotification('붙여넣기 완료');
+    if (window._markOrderDirty) window._markOrderDirty();
+
+    // 서버에 백그라운드로 요청
+    const _fetchStart = performance.now();
     fetch('/assets/copy-asset/', {
         method: 'POST',
         headers: {
@@ -1508,122 +1587,45 @@ function pasteRow() {
     })
     .then(response => response.json())
     .then(data => {
+        console.log(`[성능] 붙여넣기 서버 응답: ${(performance.now() - _fetchStart).toFixed(1)}ms`);
         if (data.success) {
-            // 새 행을 동적으로 추가
-            insertNewRow(insertAfterRow, data);
-            showNotification(`새 행이 추가되었습니다.`);
+            if (newRow) newRow.dataset.assetId = data.new_asset_id;
         } else {
-            showNotification('행 추가 실패: ' + (data.error || '알 수 없는 오류'));
+            if (newRow) { newRow.remove(); updateRowNumbers(); }
+            showNotification('붙여넣기 실패: ' + (data.error || '알 수 없는 오류'));
         }
     })
-    .catch(error => {
-        console.error('행 복사 오류:', error);
-        showNotification('행 추가 중 오류가 발생했습니다.');
+    .catch(() => {
+        if (newRow) { newRow.remove(); updateRowNumbers(); }
+        showNotification('붙여넣기 중 오류가 발생했습니다.');
     });
 }
 
-// 새 행을 테이블에 동적으로 추가
+// 새 행을 테이블에 동적으로 추가 (행 요소 반환) - 원본 그대로 복제
 function insertNewRow(afterRow, data) {
-    if (!afterRow) return;
+    if (!afterRow) return null;
 
-    // 복사한 행을 기반으로 새 행 생성
     const newRow = afterRow.cloneNode(true);
     newRow.dataset.assetId = data.new_asset_id;
 
-    // 서버코드 업데이트
-    const serverCodeCell = newRow.querySelector('td[data-field="server_code"]');
-    if (serverCodeCell) {
-        serverCodeCell.textContent = data.server_code;
-    }
-
-    // 최종수정일 업데이트
-    const lastModifiedCell = newRow.querySelector('td[data-field="last_modified_date"]');
-    if (lastModifiedCell) {
-        const now = new Date();
-        const formatted = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
-        lastModifiedCell.textContent = formatted;
-    }
-
-    // 선택 상태 초기화
+    // 선택 상태만 초기화
     newRow.classList.remove('row-selected');
     const numberCell = newRow.querySelector('.row-number-cell');
-    if (numberCell) {
-        numberCell.classList.remove('selected');
-    }
+    if (numberCell) numberCell.classList.remove('selected');
 
-    // 새 행에 하이라이트 효과
     newRow.classList.add('new-row-highlight');
-
-    // 행 삽입
     afterRow.parentNode.insertBefore(newRow, afterRow.nextSibling);
-
-    // 행 번호 업데이트
     updateRowNumbers();
-
-    // 새 행에 이벤트 리스너 추가
     setupNewRowEvents(newRow);
 
-    // 하이라이트 효과 제거
-    setTimeout(() => {
-        newRow.classList.remove('new-row-highlight');
-    }, 2000);
+    setTimeout(() => { newRow.classList.remove('new-row-highlight'); }, 2000);
+
+    return newRow;
 }
 
-// 새 행에 이벤트 리스너 설정
+// 새 행에 이벤트 리스너 설정 (이벤트 위임으로 대부분 불필요 → draggable만 설정)
 function setupNewRowEvents(row) {
-    // 드래그 앤 드롭 설정
     row.setAttribute('draggable', true);
-
-    // 행 번호 셀 클릭 이벤트
-    const numberCell = row.querySelector('.row-number-cell');
-    if (numberCell) {
-        numberCell.addEventListener('click', function() {
-            selectRow(row);
-        });
-        numberCell.addEventListener('contextmenu', function(e) {
-            e.preventDefault();
-            selectRow(row);
-            showContextMenu(e.clientX, e.clientY, 'row');
-        });
-    }
-
-    // 편집 가능한 셀에 이벤트 추가
-    const editableCells = row.querySelectorAll('td[contenteditable="true"]');
-    editableCells.forEach(cell => {
-        cell.addEventListener('focus', function() {
-            this.dataset.originalValue = this.textContent;
-            const assetId = row.dataset.assetId;
-            if (typeof sendFocus === 'function') {
-                sendFocus(assetId, this.dataset.field);
-            }
-        });
-
-        cell.addEventListener('input', function() {
-            this.classList.add('editing');
-            if (typeof debouncedCommit === 'function') {
-                debouncedCommit(this);
-            }
-        });
-
-        cell.addEventListener('blur', function() {
-            if (typeof commitChange === 'function') {
-                commitChange(this);
-            }
-            if (typeof sendBlur === 'function') {
-                sendBlur();
-            }
-        });
-
-        cell.addEventListener('keydown', function(e) {
-            if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                if (typeof commitChange === 'function') {
-                    commitChange(this);
-                }
-                this.blur();
-            }
-        });
-    });
 }
 
 // 컨텍스트 메뉴 생성

@@ -88,8 +88,12 @@ DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.sqlite3',
         'NAME': BASE_DIR / 'db.sqlite3',
+        'CONN_MAX_AGE': None,  # DB 연결 재사용 (매 요청마다 새 연결 생성 방지)
     }
 }
+
+# 세션을 서명된 쿠키에 저장 (DB 쿼리 제거)
+SESSION_ENGINE = 'django.contrib.sessions.backends.signed_cookies'
 
 
 # Password validation

@@ -323,59 +323,62 @@ function flushAllPendingChanges() {
     pendingChanges.clear();
 }
 
-// 셀 편집 이벤트 리스너
+// 셀 편집 이벤트 리스너 (최적화: 이벤트 위임 - 46,900개 리스너 → 4개 리스너)
 document.addEventListener('DOMContentLoaded', function() {
     const table = document.getElementById('assetTable');
     if (!table) return;
 
-    const editableCells = table.querySelectorAll('td[contenteditable="true"]');
+    // focusin/focusout은 focus/blur와 달리 버블링됨 → 이벤트 위임 가능
+    table.addEventListener('focusin', function(e) {
+        const cell = e.target;
+        if (cell.tagName !== 'TD' || !cell.isContentEditable) return;
 
-    editableCells.forEach(cell => {
-        // 포커스 시 원래 값 저장 및 서버에 알림
-        cell.addEventListener('focus', function() {
-            this.dataset.originalValue = this.textContent;
+        cell.dataset.originalValue = cell.textContent;
+        const row = cell.closest('tr');
+        if (row) {
+            sendFocus(row.dataset.assetId, cell.dataset.field);
+        }
+    });
 
-            const row = this.closest('tr');
+    table.addEventListener('input', function(e) {
+        const cell = e.target;
+        if (cell.tagName !== 'TD' || !cell.isContentEditable) return;
+
+        cell.classList.add('editing');
+        debouncedCommit(cell);
+    });
+
+    table.addEventListener('focusout', function(e) {
+        const cell = e.target;
+        if (cell.tagName !== 'TD' || !cell.isContentEditable) return;
+
+        commitChange(cell);
+        sendBlur();
+    });
+
+    table.addEventListener('keydown', function(e) {
+        const cell = e.target;
+        if (cell.tagName !== 'TD' || !cell.isContentEditable) return;
+
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            commitChange(cell);
+            cell.blur();
+        } else if (e.key === 'Escape') {
+            e.preventDefault();
+            const row = cell.closest('tr');
             if (row) {
-                sendFocus(row.dataset.assetId, this.dataset.field);
-            }
-        });
-
-        // 입력 시 디바운스 적용
-        cell.addEventListener('input', function() {
-            this.classList.add('editing');
-            debouncedCommit(this);
-        });
-
-        // blur 시 즉시 저장 및 서버에 알림
-        cell.addEventListener('blur', function() {
-            commitChange(this);
-            sendBlur();
-        });
-
-        // Enter 키로 즉시 저장
-        cell.addEventListener('keydown', function(e) {
-            if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                commitChange(this);
-                this.blur();
-            } else if (e.key === 'Escape') {
-                // ESC 키로 편집 취소
-                e.preventDefault();
-                const key = `${this.closest('tr').dataset.assetId}|${this.dataset.field}`;
-
-                // 타이머 취소
+                const key = `${row.dataset.assetId}|${cell.dataset.field}`;
                 if (debounceTimers.has(key)) {
                     clearTimeout(debounceTimers.get(key));
                     debounceTimers.delete(key);
                 }
                 pendingChanges.delete(key);
-
-                this.textContent = this.dataset.originalValue || '';
-                this.classList.remove('editing');
-                this.blur();
             }
-        });
+            cell.textContent = cell.dataset.originalValue || '';
+            cell.classList.remove('editing');
+            cell.blur();
+        }
     });
 
     connectWebSocket();

@@ -1,3 +1,4 @@
+from functools import wraps
 from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin
@@ -5,12 +6,26 @@ from django.views.generic import ListView, CreateView, UpdateView, DeleteView
 from django.urls import reverse_lazy
 from django.contrib import messages
 from django.http import JsonResponse
-from django.db.models import Max, F
+from django.views.decorators.csrf import csrf_exempt
+from django.db.models import Max
+from django.db import transaction, connection
 from django.utils import timezone
 from datetime import timedelta
+import json
+import uuid
 import pandas as pd
 from .models import ServerAsset, ChangeHistory, CustomField, CustomFieldValue
 from .forms import ExcelUploadForm, ServerAssetForm
+
+
+def fast_login_required(view_func):
+    """초고속 인증 체크: request.user 접근 없이 세션만 확인 (User DB 쿼리 제거)"""
+    @wraps(view_func)
+    def wrapper(request, *args, **kwargs):
+        if not request.session.get('_auth_user_id'):
+            return JsonResponse({'success': False, 'error': 'Not authenticated'}, status=401)
+        return view_func(request, *args, **kwargs)
+    return wrapper
 
 
 def cleanup_old_change_history(days=14):
@@ -25,10 +40,9 @@ class AssetListView(LoginRequiredMixin, ListView):
     model = ServerAsset
     template_name = 'assets/asset_list.html'
     context_object_name = 'assets'
-    paginate_by = None  # 모든 자산 표시 (페이지네이션 비활성화)
 
     def get_queryset(self):
-        queryset = super().get_queryset().order_by('display_order', 'id')
+        queryset = super().get_queryset().prefetch_related('custom_field_values__custom_field').order_by('display_order', 'id')
         search = self.request.GET.get('search')
         if search:
             queryset = queryset.filter(
@@ -433,7 +447,6 @@ def custom_field_delete_view(request, pk):
 def custom_field_reorder_view(request):
     """사용자 정의 필드 순서 변경 (AJAX)"""
     if request.method == 'POST':
-        import json
         try:
             data = json.loads(request.body)
             order = data.get('order', [])
@@ -452,7 +465,6 @@ def custom_field_reorder_view(request):
 def update_custom_field_value(request):
     """사용자 정의 필드 값 업데이트 (AJAX)"""
     if request.method == 'POST':
-        import json
         try:
             data = json.loads(request.body)
             asset_id = data.get('asset_id')
@@ -486,11 +498,12 @@ def update_custom_field_value(request):
     return JsonResponse({'success': False, 'error': 'POST method required'})
 
 
+@csrf_exempt
 @login_required
+@transaction.atomic
 def reorder_assets_view(request):
-    """자산(행) 순서 변경 (AJAX)"""
+    """자산(행) 순서 변경 (AJAX / sendBeacon)"""
     if request.method == 'POST':
-        import json
         try:
             data = json.loads(request.body)
             order = data.get('order', [])  # asset_id 배열
@@ -525,7 +538,6 @@ def reorder_assets_view(request):
 def record_column_order_change(request):
     """컬럼 순서 변경 이력 기록 (AJAX)"""
     if request.method == 'POST':
-        import json
         try:
             data = json.loads(request.body)
             column_name = data.get('column_name', '')
@@ -548,162 +560,87 @@ def record_column_order_change(request):
     return JsonResponse({'success': False, 'error': 'POST method required'})
 
 
-@login_required
+@csrf_exempt
+@fast_login_required
 def copy_asset_view(request):
-    """자산(행) 복사 - 새 행 생성 (AJAX)"""
+    """자산(행) 복사 - raw SQL INSERT...SELECT로 최대 속도"""
     if request.method == 'POST':
-        import json
         try:
             data = json.loads(request.body)
-            source_asset_id = data.get('source_asset_id')
-            insert_after_asset_id = data.get('insert_after_asset_id')
-            row_data = data.get('row_data', {})
+            source_id = data.get('source_asset_id')
+            now = timezone.now().strftime('%Y-%m-%d %H:%M:%S.%f')
 
-            # 원본 자산 가져오기
-            source_asset = ServerAsset.objects.get(pk=source_asset_id)
+            with connection.cursor() as cursor:
+                # INSERT...SELECT로 한 번에 복사 (ORM/signals 완전 바이패스)
+                cursor.execute(
+                    """INSERT INTO server_assets
+                    (server_code, asset_name, status, internet_facing, display_order,
+                     acg, os, private_ip, public_ip, vpn_ip,
+                     service_category, service_subcategory, asset_location, detailed_location,
+                     specs, manager, administrator, management_department,
+                     confidentiality, integrity, availability, importance_score, importance_grade,
+                     notes, model_version, last_modified_date, created_at, updated_at)
+                    SELECT server_code, asset_name, status, internet_facing, 0,
+                           acg, os, private_ip, public_ip, vpn_ip,
+                           service_category, service_subcategory, asset_location, detailed_location,
+                           specs, manager, administrator, management_department,
+                           confidentiality, integrity, availability, importance_score, importance_grade,
+                           notes, model_version, %s, %s, %s
+                    FROM server_assets WHERE id = %s""",
+                    [now, now, now, source_id]
+                )
+                new_asset_id = cursor.lastrowid
 
-            # 삽입 위치 이후의 자산들 display_order 일괄 증가
-            if insert_after_asset_id:
-                try:
-                    ref_asset = ServerAsset.objects.get(pk=insert_after_asset_id)
-                    ref_order = ref_asset.display_order
-                except ServerAsset.DoesNotExist:
-                    ref_order = ServerAsset.objects.aggregate(Max('display_order'))['display_order__max'] or 0
-                ServerAsset.objects.filter(display_order__gt=ref_order).update(display_order=F('display_order') + 1)
-                new_display_order = ref_order + 1
-            else:
-                max_order = ServerAsset.objects.aggregate(Max('display_order'))['display_order__max'] or 0
-                new_display_order = max_order + 1
-
-            # 고유한 서버코드 생성
-            import time
-            base_code = source_asset.server_code.replace('_복사', '').split('_')[0]  # 원본 코드 추출
-            timestamp = int(time.time() * 1000) % 100000  # 짧은 타임스탬프
-            new_server_code = f"{base_code}_복사_{timestamp}"
-
-            # 중복 체크 및 재생성
-            while ServerAsset.objects.filter(server_code=new_server_code).exists():
-                timestamp += 1
-                new_server_code = f"{base_code}_복사_{timestamp}"
-
-            # 새 자산 생성 (원본 복사)
-            new_asset = ServerAsset(
-                status=row_data.get('status', {}).get('value', source_asset.status),
-                server_code=new_server_code,
-                asset_name=row_data.get('asset_name', {}).get('value', source_asset.asset_name),
-                acg=row_data.get('acg', {}).get('value', source_asset.acg),
-                os=row_data.get('os', {}).get('value', source_asset.os),
-                private_ip=row_data.get('private_ip', {}).get('value', source_asset.private_ip),
-                public_ip=row_data.get('public_ip', {}).get('value', source_asset.public_ip),
-                vpn_ip=row_data.get('vpn_ip', {}).get('value', source_asset.vpn_ip),
-                internet_facing=source_asset.internet_facing,
-                service_category=row_data.get('service_category', {}).get('value', source_asset.service_category),
-                service_subcategory=row_data.get('service_subcategory', {}).get('value', source_asset.service_subcategory),
-                asset_location=row_data.get('asset_location', {}).get('value', source_asset.asset_location),
-                detailed_location=row_data.get('detailed_location', {}).get('value', source_asset.detailed_location),
-                specs=row_data.get('specs', {}).get('value', source_asset.specs),
-                manager=row_data.get('manager', {}).get('value', source_asset.manager),
-                administrator=row_data.get('administrator', {}).get('value', source_asset.administrator),
-                management_department=row_data.get('management_department', {}).get('value', source_asset.management_department),
-                confidentiality=row_data.get('confidentiality', {}).get('value', source_asset.confidentiality),
-                integrity=row_data.get('integrity', {}).get('value', source_asset.integrity),
-                availability=row_data.get('availability', {}).get('value', source_asset.availability),
-                importance_score=source_asset.importance_score,
-                importance_grade=row_data.get('importance_grade', {}).get('value', source_asset.importance_grade),
-                notes=row_data.get('notes', {}).get('value', source_asset.notes),
-                model_version=row_data.get('model_version', {}).get('value', source_asset.model_version),
-                display_order=new_display_order
-            )
-            new_asset.save()
-
-            # 사용자 정의 필드 값도 복사
-            from .models import CustomField, CustomFieldValue
-            custom_field_values = CustomFieldValue.objects.filter(asset=source_asset)
-            for cfv in custom_field_values:
-                CustomFieldValue.objects.create(
-                    asset=new_asset,
-                    custom_field=cfv.custom_field,
-                    value=cfv.value
+                # 사용자 정의 필드도 한 번에 복사
+                cursor.execute(
+                    """INSERT INTO custom_field_values (asset_id, custom_field_id, value, updated_at)
+                    SELECT %s, custom_field_id, value, %s
+                    FROM custom_field_values WHERE asset_id = %s""",
+                    [new_asset_id, now, source_id]
                 )
 
-            # 변경 이력 기록
-            ChangeHistory.objects.create(
-                asset=new_asset,
-                user=request.user,
-                field_name='[행 복사]',
-                old_value=f'원본: {source_asset.server_code}',
-                new_value=f'복사본: {new_asset.server_code}',
-                change_type='CREATE'
-            )
-
             return JsonResponse({
                 'success': True,
-                'new_asset_id': new_asset.id,
-                'server_code': new_asset.server_code
+                'new_asset_id': new_asset_id,
             })
-        except ServerAsset.DoesNotExist:
-            return JsonResponse({'success': False, 'error': '원본 자산을 찾을 수 없습니다.'})
         except Exception as e:
             return JsonResponse({'success': False, 'error': str(e)})
 
     return JsonResponse({'success': False, 'error': 'POST method required'})
 
 
-@login_required
+@csrf_exempt
+@fast_login_required
 def create_empty_asset_view(request):
-    """빈 자산(행) 생성 (AJAX)"""
+    """빈 자산(행) 생성 - raw SQL INSERT로 최대 속도"""
     if request.method == 'POST':
-        import json
-        import time
         try:
-            data = json.loads(request.body)
-            insert_after_asset_id = data.get('insert_after_asset_id')
+            new_server_code = f"NEW_{uuid.uuid4().hex[:8]}"
+            now = timezone.now().strftime('%Y-%m-%d %H:%M:%S.%f')
 
-            # 삽입 위치 이후의 자산들 display_order 일괄 증가
-            if insert_after_asset_id:
-                try:
-                    ref_asset = ServerAsset.objects.get(pk=insert_after_asset_id)
-                    ref_order = ref_asset.display_order
-                except ServerAsset.DoesNotExist:
-                    ref_order = ServerAsset.objects.aggregate(Max('display_order'))['display_order__max'] or 0
-                ServerAsset.objects.filter(display_order__gt=ref_order).update(display_order=F('display_order') + 1)
-                new_display_order = ref_order + 1
-            else:
-                max_order = ServerAsset.objects.aggregate(Max('display_order'))['display_order__max'] or 0
-                new_display_order = max_order + 1
-
-            # 고유한 서버코드 생성
-            timestamp = int(time.time() * 1000) % 100000
-            new_server_code = f"NEW_{timestamp}"
-
-            while ServerAsset.objects.filter(server_code=new_server_code).exists():
-                timestamp += 1
-                new_server_code = f"NEW_{timestamp}"
-
-            # 빈 자산 생성
-            new_asset = ServerAsset(
-                server_code=new_server_code,
-                asset_name='',
-                status='',
-                internet_facing=None,
-                display_order=new_display_order
-            )
-            new_asset.save()
-
-            # 변경 이력 기록
-            ChangeHistory.objects.create(
-                asset=new_asset,
-                user=request.user,
-                field_name='[행 생성]',
-                old_value='',
-                new_value=f'새 행: {new_asset.server_code}',
-                change_type='CREATE'
-            )
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """INSERT INTO server_assets
+                    (server_code, asset_name, status, internet_facing, display_order,
+                     acg, os, private_ip, public_ip, vpn_ip,
+                     service_category, service_subcategory, asset_location, detailed_location,
+                     specs, manager, administrator, management_department,
+                     confidentiality, integrity, availability, importance_score, importance_grade,
+                     notes, model_version, last_modified_date, created_at, updated_at)
+                    VALUES (%s, '', '', NULL, 0,
+                            '', '', '', '', '',
+                            '', '', '', '',
+                            '', '', '', '',
+                            '', '', '', NULL, '',
+                            '', '', %s, %s, %s)""",
+                    [new_server_code, now, now, now]
+                )
+                new_asset_id = cursor.lastrowid
 
             return JsonResponse({
                 'success': True,
-                'new_asset_id': new_asset.id,
-                'server_code': new_asset.server_code
+                'new_asset_id': new_asset_id,
+                'server_code': new_server_code
             })
         except Exception as e:
             return JsonResponse({'success': False, 'error': str(e)})
@@ -711,34 +648,21 @@ def create_empty_asset_view(request):
     return JsonResponse({'success': False, 'error': 'POST method required'})
 
 
-@login_required
+@csrf_exempt
+@fast_login_required
 def delete_asset_view(request):
-    """자산(행) 삭제 (AJAX)"""
+    """자산(행) 삭제 (AJAX) - raw SQL로 CASCADE/signals 오버헤드 제거"""
     if request.method == 'POST':
-        import json
         try:
             data = json.loads(request.body)
             asset_id = data.get('asset_id')
 
-            asset = ServerAsset.objects.get(pk=asset_id)
-            server_code = asset.server_code
-            asset_name = asset.asset_name
-
-            asset.delete()
-
-            # 변경 이력 기록 (asset=None, 이미 삭제됨)
-            ChangeHistory.objects.create(
-                asset=None,
-                user=request.user,
-                field_name='[행 삭제]',
-                old_value=f'{server_code} - {asset_name}',
-                new_value='',
-                change_type='DELETE'
-            )
+            with connection.cursor() as cursor:
+                cursor.execute("DELETE FROM change_history WHERE asset_id = %s", [asset_id])
+                cursor.execute("DELETE FROM custom_field_values WHERE asset_id = %s", [asset_id])
+                cursor.execute("DELETE FROM server_assets WHERE id = %s", [asset_id])
 
             return JsonResponse({'success': True})
-        except ServerAsset.DoesNotExist:
-            return JsonResponse({'success': False, 'error': '자산을 찾을 수 없습니다.'})
         except Exception as e:
             return JsonResponse({'success': False, 'error': str(e)})
 
